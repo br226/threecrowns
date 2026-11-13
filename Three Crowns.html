@@ -32,23 +32,36 @@ button:disabled{opacity:.4}
 .seg{display:flex;gap:6px;width:min(320px,100%)}.seg button{flex:1;width:auto!important}
 #menu input{font:inherit;font-size:20px;width:min(320px,100%);box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #2b3946;background:#18222b;color:#e6edf2}
 .fl{display:grid;grid-template-columns:repeat(4,72px);gap:10px}.fl canvas{width:72px;height:48px;border:2px solid transparent;border-radius:4px}.fl canvas.on{border-color:#fff}
+#tbar{display:flex;gap:8px;align-items:center;padding:4px 10px;background:var(--bar);border-top:1px solid var(--line)}
+#tbar[hidden]{display:none}
+#tbar span{font-weight:700;flex:none}
+#tsl{flex:1;min-width:80px;height:44px;margin:0;accent-color:var(--acc)}
+#tin{font:inherit;font-size:18px;width:100px;min-height:44px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink)}
+#tin:disabled,#tsl:disabled{opacity:.4}
+.pr{display:flex;align-items:center;gap:10px;width:min(320px,100%);font-size:20px}.pr canvas{width:36px;height:24px;border-radius:2px}
+#menu input#rc{text-transform:uppercase;letter-spacing:4px;text-align:center}
 </style></head><body>
 <div id="stage"><canvas id="c"></canvas><div id="msg"></div><div id="card" hidden></div><div id="win" hidden></div></div>
-<div id="bar"></div><div id="menu"></div>
+<div id="tbar" hidden><span>Troops</span><input id="tsl" type="range" min="1" max="100" value="50"><input id="tin" type="number" inputmode="numeric" min="0"><button data-a="max">Max</button></div><div id="bar"></div><div id="menu"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 'use strict';
-const $=s=>document.querySelector(s),cv=$('#c'),cx=cv.getContext('2d'),bar=$('#bar'),msg=$('#msg'),card=$('#card'),win=$('#win');
-const OC=['','#c8453b','#3d72c9','#d8a31f'],NAME=['','Player','Atlas','Vega'],FL=[0,0,1,2],COST_MIS=150,SPEED=1.4;
-let W=36,H=24,T=20,ox=0,oy=0,dpr=1,now=0,last=0,terr,own,lm,ft,caps,mode='edit',tool=1,cur=1,sol=[0,80,80,80],alive=[0,1,1,1],attacks=[],missiles=[],fx=[],armed=false,pend=null,pendAt=null,drag=null,tap=null,painting=false,paintLast=null,ptr=null,won=0,cardP=0,diff=1,mapType='custom',brush=3,bots=false,shk=-1e9,sprites=[],pops=[],lastSpawn=0;
+const $=s=>document.querySelector(s),cv=$('#c'),cx=cv.getContext('2d'),bar=$('#bar'),msg=$('#msg'),card=$('#card'),win=$('#win'),tbar=$('#tbar'),tsl=$('#tsl'),tin=$('#tin');
+const OC=['','#c8453b','#3d72c9','#d8a31f'],NAME=['','Player','Atlas','Vega'],FL=[0,0,1,2],COST_MIS=15000,SPEED=1.4;
+let W=36,H=24,T=20,ox=0,oy=0,dpr=1,now=0,last=0,terr,own,lm,ft,caps,mode='edit',tool=1,cur=1,sol=[0,80,80,80],alive=[0,1,1,1],attacks=[],missiles=[],fx=[],armed=false,pend=null,pendAt=null,drag=null,tap=null,painting=false,paintLast=null,ptr=null,won=0,cardP=0,diff=1,mapType='custom',brush=3,bots=false,shk=-1e9,sprites=[],pops=[],lastSt=0,troops=50,tauto=true,sliding=false,net=null,botSeat=[0,0,1,1];
 let st={n:[],inc:[],tx:[],ty:[]};const pos=[0,{x:0,y:0},{x:0,y:0},{x:0,y:0}];
-const idx=(x,y)=>y*W+x,inb=(x,y)=>x>=0&&y>=0&&x<W&&y<H;
+const D4=[[1,0],[-1,0],[0,1],[0,-1]],idx=(x,y)=>y*W+x,inb=(x,y)=>x>=0&&y>=0&&x<W&&y<H;
 
 /* ---- Network layer: swap this for Supabase later. Every game change goes through dispatch(). ---- */
 const Net={send(a){/* e.g. supabase.from('moves').insert(a) */},recv(a){reduce(a)}};
-function dispatch(a){Net.send(a);reduce(a)}
+function dispatch(a){if(net&&net.role==='guest'){if(a.type==='attack'||a.type==='missile')netSend('act',{id:myId,a});return}Net.send(a);reduce(a)}
 function reduce(a){
- if(a.type==='attack'){if(sol[a.p]<a.cost)return;sol[a.p]-=a.cost;attacks.push({p:a.p,t0:performance.now(),done:[],force:a.cost,lp:0,q:a.tiles.map((i,k)=>({i,k:a.d[k]+Math.random()*.9}))})}
- else if(a.type==='missile'){if(sol[a.p]<COST_MIS)return;sol[a.p]-=COST_MIS;const s=nearestOwn(a.p,a.x,a.y),dist=Math.hypot(s.x-a.x,s.y-a.y);missiles.push({s,x:a.x,y:a.y,p:a.p,t0:performance.now(),dur:Math.min(1600,Math.max(700,dist*55)),ah:Math.min(6,dist*.4)})}
+ if(a.type==='attack'){if(a.cost<1||sol[a.p]<a.cost)return;sol[a.p]-=a.cost;
+  const src=[],seen=new Set();
+  for(const i of a.tiles){const x=i%W,y=(i/W)|0;for(const d of D4){const X=x+d[0],Y=y+d[1];if(inb(X,Y)){const j=idx(X,Y);if(own[j]===a.p&&!seen.has(j)){seen.add(j);src.push(j)}}}}
+  const st2=Math.ceil(src.length/80);
+  attacks.push({p:a.p,done:[],src:st2>1?src.filter((_,k)=>k%st2===0):src,force:a.cost,m:a.m||1,thr:0,stall:false,ls:0,lp:0,q:a.tiles.map((i,k)=>({i,k:a.d[k]+Math.random()*.9,pay:0}))})}
+ else if(a.type==='missile'){if(sol[a.p]<COST_MIS)return;sol[a.p]-=COST_MIS;const s=nearestOwn(a.p,a.x,a.y),dist=Math.hypot(s.x-a.x,s.y-a.y),m={s,x:a.x,y:a.y,p:a.p,t0:performance.now(),dur:Math.min(1600,Math.max(700,dist*55)),ah:Math.min(6,dist*.4)};missiles.push(m);if(net&&net.role==='host')netSend('mis',{s:m.s,x:m.x,y:m.y,p:m.p,dur:m.dur,ah:m.ah})}
  else if(a.type==='end')nextTurn();
 }
 function nearestOwn(p,x,y){let b=1e9,r={x:caps[p].x+.5,y:caps[p].y+.5};for(let j=0;j<H;j++)for(let i=0;i<W;i++)if(own[idx(i,j)]===p){const d=Math.hypot(i+.5-x,j+.5-y);if(d<b){b=d;r={x:i+.5,y:j+.5}}}return r}
@@ -85,9 +98,9 @@ function connected(){
 function start(){
  if(!caps[1]||!caps[2]||!caps[3])return flash('Place all three capitals first');
  if(!connected())return flash('Connect the capitals with land or water');
- assign();$("#menu").hidden=true;own.fill(0);ft.fill(-1e9);sol=[0,100,100,100];alive=[0,1,1,1];attacks=[];missiles=[];fx=[];armed=false;pend=null;won=0;cur=1;mode='play';hideCard();win.hidden=true;
+ assign();$("#menu").hidden=true;own.fill(0);ft.fill(-1e9);sol=[0,100,100,100];alive=[0,1,1,1];attacks=[];missiles=[];fx=[];sprites=[];pops=[];armed=false;pend=null;won=0;cur=net?net.seat:1;mode='play';if(net)net.elim=0;hideCard();win.hidden=true;
  for(let p=1;p<4;p++){const c=caps[p];for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){const x=c.x+dx,y=c.y+dy;if(inb(x,y)&&terr[idx(x,y)]===1&&!own[idx(x,y)])own[idx(x,y)]=p}own[idx(c.x,c.y)]=p}
- stats();for(let p=1;p<4;p++)pos[p]={x:st.tx[p],y:st.ty[p]};ui();hint()
+ stats();for(let p=1;p<4;p++)pos[p]={x:st.tx[p],y:st.ty[p]};ui();hint();if(net&&net.role==='host')hostStarted()
 }
 
 /* ---- Draw-to-conquer planning: lasso zone -> reachable tiles -> affordable cost ---- */
@@ -104,11 +117,11 @@ function plan(pts,p,zz,cap){
   if(own[i]===p){d[i]=0;zero.push(i);continue}
   if(!terr[i])continue;
   for(const n of nb){const a=x+n[0],b=y+n[1];if(inb(a,b)&&own[idx(a,b)]===p){d[i]=1;one.push(i);break}}}
- const q=zero.concat(one),res={tiles:[],d:[],cost:0,trunc:false};
+ const q=zero.concat(one),C=cap??sol[p],res={tiles:[],d:[],cost:0,trunc:false,total:0,spend:0,m:1};
  for(let h=0;h<q.length;h++){const i=q[h],x=i%W,y=(i/W)|0;
   for(const n of nb){const a=x+n[0],b=y+n[1];if(!inb(a,b))continue;const j=idx(a,b);if(z[j]&&terr[j]&&own[j]!==p&&d[j]<0){d[j]=d[i]+1;q.push(j)}}}
- for(const i of q){if(d[i]<1)continue;const c=(terr[i]===2?2:1)*(own[i]?5:2);
-  if(res.cost+c>(cap??sol[p])){res.trunc=true;break}res.cost+=c;res.tiles.push(i);res.d.push(d[i])}
+ for(const i of q){if(d[i]<1)continue;const c=(terr[i]===2?2:1)*(own[i]?5:2);res.total+=c;if(res.trunc)continue;if(res.cost+c>C){res.trunc=true;continue}res.cost+=c;res.tiles.push(i);res.d.push(d[i])}
+ res.spend=Math.floor(Math.max(res.cost,Math.min(C,1e9)));res.m=calcM(C,res.total);
  return res
 }
 
@@ -119,23 +132,30 @@ function flip(p,i){
 }
 function eliminate(c,p,i){
  alive[c]=0;sol[p]+=Math.floor(sol[c]/2);sol[c]=0;const cx0=i%W,cy0=(i/W)|0,q=[];
- for(let j=0;j<W*H;j++)if(own[j]===c)q.push({i:j,k:Math.hypot(j%W-cx0,((j/W)|0)-cy0)*.7+Math.random()*.9});
- attacks.push({p,t0:now,q});
- if(alive.reduce((s,v)=>s+v,0)===1){won=p;setTimeout(()=>{win.innerHTML=`<div><span><i class="dot" style="background:${OC[p]}"></i>${NAME[p]} wins</span><button class="pri" data-a="again">Rematch</button><button data-a="edit">Menu</button></div>`;win.hidden=false},1800)}
+ for(let j=0;j<W*H;j++)if(own[j]===c)q.push({i:j,k:Math.hypot(j%W-cx0,((j/W)|0)-cy0)*.7+Math.random()*.9,pay:0});
+ attacks.push({p,done:[],src:[],force:0,free:true,m:2,thr:0,stall:false,ls:0,lp:0,q});
+ if(alive.reduce((s,v)=>s+v,0)===1){won=p;setTimeout(()=>showWin(p),1800)}
 }
+function showWin(p){const g=net&&net.role==='guest';win.innerHTML=`<div><span><i class="dot" style="background:${OC[p]}"></i>${NAME[p]} wins</span>${g?'<span style="font-size:18px;opacity:.8">Waiting for the host to start a rematch...</span>':'<button class="pri" data-a="again">Rematch</button>'}<button data-a="edit">${net?'Leave':'Menu'}</button></div>`;win.hidden=false}
 function blast(){return Math.max(2.3,W/16)}
 function impact(m){
  const B=blast();
  for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(Math.hypot(x+.5-m.x,y+.5-m.y)>B)continue;const i=idx(x,y),q=own[i];if(!q||q===m.p)continue;
   if(capAt(i)){sol[q]*=.9;continue}own[i]=0;ft[i]=now;sol[q]=Math.max(0,sol[q]-1)}
+ impactFx(m)}
+function impactFx(m){
  shk=now;fx.push({x:m.x,y:m.y,t0:now,sp:Array.from({length:26},()=>({a:Math.random()*6.28,v:.6+Math.random()*2.4,s:Math.random()})),sm:Array.from({length:8},()=>({a:Math.random()*6.28,d:.3+Math.random()*.9}))})
 }
-function pop(x,y){if(pops.length<140)pops.push({x,y,t0:now,sp:[0,1,2,3].map(()=>Math.random()*6.28)})}
-function spawn(A,thr,bl){if(bl){const q=own[bl.i],bx=bl.i%W+.5,by=((bl.i/W)|0)+.5;sprites.push({p:q,x0:bx+Math.random()*8-4,y0:by+Math.random()*8-4,x1:bx,y1:by,t0:now,dur:900+Math.random()*500})}
- for(let n=0;n<2;n++){
-  const c=A.q.filter(e=>e.k<thr+3),L=c.length?c:A.q,e=L[(Math.random()*L.length)|0];
-  const o=A.done.length?A.done[A.done.length-1-((Math.random()*Math.min(30,A.done.length))|0)]:idx(caps[A.p].x,caps[A.p].y);
-  sprites.push({p:A.p,x0:(o%W)+.5,y0:((o/W)|0)+.5,x1:(e.i%W)+.5,y1:((e.i/W)|0)+.5,t0:now,dur:1300+Math.random()*600})}
+function pop(x,y){if(pops.length<50)pops.push({x,y,t0:now,sp:[0,1,2,3].map(()=>Math.random()*6.28)})}
+function spawn(A,bl){
+ if(sprites.length>=16)return;
+ const f=A.q.filter(e=>e.k<=A.thr+1.5),L=f.length?f:A.q,e=L[(Math.random()*L.length)|0],tx=e.i%W+.5,ty=((e.i/W)|0)+.5,pool=A.src.concat(A.done.slice(-12));
+ let o=null,bd=1e9;
+ for(let n=0;n<6&&pool.length;n++){const j=pool[(Math.random()*pool.length)|0],dd=Math.hypot(j%W+.5-tx,((j/W)|0)+.5-ty);if(dd<bd){bd=dd;o=j}}
+ sprites.push({p:A.p,x0:o==null?tx:o%W+.5,y0:o==null?ty:((o/W)|0)+.5,x1:tx,y1:ty,t0:now,dur:900+Math.random()*500,rest:1100});
+ if(bl&&sprites.length<16){const q=own[bl.i],bx=bl.i%W+.5,by=((bl.i/W)|0)+.5;let sx=bx,sy=by;
+  for(const d of D4){const a=(bl.i%W)+d[0],b=((bl.i/W)|0)+d[1];if(inb(a,b)&&own[idx(a,b)]===q){sx=a+.5+d[0]*1.5;sy=b+.5+d[1]*1.5;break}}
+  sprites.push({p:q,x0:sx,y0:sy,x1:bx,y1:by,t0:now,dur:900+Math.random()*400,rest:900})}
 }
 function stats(){
  const n=[0,0,0,0],inc=[0,0,0,0],sx=[0,0,0,0],sy=[0,0,0,0];
@@ -146,22 +166,27 @@ function stats(){
  st.n=n;st.inc=inc
 }
 function step(dt){
- if(!won)for(let p=1;p<4;p++)if(alive[p])sol[p]+=st.inc[p]*dt*(bots&&p>1?[1,1.3,1.7][diff]:1);
- for(let a=attacks.length-1;a>=0;a--){const A=attacks[a],thr=(now-A.t0)/1000*SPEED;let bl=null;
-  for(let k=A.q.length-1;k>=0;k--){const e=A.q[k];if(e.k>thr)continue;const q=own[e.i];
-   if(q&&q!==A.p&&alive[q]&&sol[q]>1&&A.force>0){bl=bl||e;continue}
-   flip(A.p,e.i);A.done.push(e.i);A.q.splice(k,1);if(Math.random()<(q?.9:.35))pop(e.i%W+.5,((e.i/W)|0)+.5)}
-  if(bl){const q=own[bl.i],c=Math.min(sol[q],A.force,30*dt);sol[q]-=c;A.force-=c;A.t0+=dt*800;
-   if(now-A.lp>80){A.lp=now;pop(bl.i%W+Math.random()*2-.5,((bl.i/W)|0)+Math.random()*2-.5)}
-   if(A.force<=0)A.q=[]}
-  if(now-lastSpawn>150&&A.q.length&&sprites.length<70){lastSpawn=now;spawn(A,thr,bl)}
+ if(!won)for(let p=1;p<4;p++)if(alive[p])sol[p]+=st.inc[p]*dt*(botSeat[p]?[1,1.3,1.7][diff]:1);
+ if(net&&net.role==='host'&&net.started&&!won)for(let p=1;p<4;p++)if(botSeat[p]&&alive[p]){net.bc[p]-=dt;if(net.bc[p]<=0){net.bc[p]=[5,3.5,2.5][diff]*(.8+Math.random()*.4);botAct(p)}}
+ for(let a=attacks.length-1;a>=0;a--){const A=attacks[a];
+  if(!A.stall)A.thr+=dt*SPEED*A.m;A.stall=false;let bl=null,nb=0;
+  for(let k=A.q.length-1;k>=0;k--){const e=A.q[k];if(e.k>A.thr)continue;const q=own[e.i];
+   if(q&&q!==A.p&&alive[q]&&sol[q]>1&&!A.free){
+    if(A.force<=.01){A.q.length=0;break}
+    A.stall=true;if(nb>=4)continue;nb++;bl=bl||e;
+    const g=Math.max(2,sol[q]/Math.max(1,st.n[q])*1.5)*(capAt(e.i)?4:1),r=Math.max(0,Math.min(Math.max(25,A.force*.25)*dt,g-e.pay,sol[q],A.force));
+    e.pay+=r;sol[q]-=r;A.force-=r;
+    if(e.pay<g-.001)continue}
+   flip(A.p,e.i);A.done.push(e.i);A.q.splice(k,1);if(Math.random()<.5)pop(e.i%W+.5,((e.i/W)|0)+.5)}
+  if(bl&&now-A.lp>110){A.lp=now;pop(bl.i%W+Math.random()*2-.5,((bl.i/W)|0)+Math.random()*2-.5)}
+  if(A.q.length&&now-A.ls>240){A.ls=now;spawn(A,bl)}
   if(!A.q.length)attacks.splice(a,1)}
- for(let k=missiles.length-1;k>=0;k--)if(now-missiles[k].t0>=missiles[k].dur){impact(missiles[k]);missiles.splice(k,1)}
- for(let k=fx.length-1;k>=0;k--)if(now-fx[k].t0>1200)fx.splice(k,1);sprites=sprites.filter(s=>now-s.t0<s.dur);pops=pops.filter(o=>now-o.t0<450);
+ for(let k=missiles.length-1;k>=0;k--)if(now-missiles[k].t0>=missiles[k].dur){(net&&net.role==='guest'?impactFx:impact)(missiles[k]);missiles.splice(k,1)}
+ for(let k=fx.length-1;k>=0;k--)if(now-fx[k].t0>1200)fx.splice(k,1);sprites=sprites.filter(s=>now-s.t0<s.dur+s.rest);pops=pops.filter(o=>now-o.t0<450);
  for(let p=1;p<4;p++)if(alive[p]){const f=Math.min(1,dt*6);pos[p].x+=(st.tx[p]-pos[p].x)*f;pos[p].y+=(st.ty[p]-pos[p].y)*f}
- if(!alive[cur]&&!won)nextTurn();
- const m=$('#bMis');if(m)m.disabled=sol[cur]<COST_MIS||(bots&&cur!==1);
- if(cardP){$('#cs').textContent=Math.floor(sol[cardP]);$('#cl').textContent=st.n[cardP];$('#ci').textContent='+'+st.inc[cardP].toFixed(1)+'/s'}
+ if(!net&&!alive[cur]&&!won)nextTurn();if(net&&!alive[cur]&&!won&&!net.elim){net.elim=1;msg.textContent='You were eliminated. Spectating...'}
+ const m=$('#bMis');if(m)m.disabled=sol[cur]<COST_MIS||(bots&&cur!==1);syncT();
+ if(cardP){$('#cs').textContent=nf(sol[cardP]);$('#cl').textContent=st.n[cardP];$('#ci').textContent='+'+st.inc[cardP].toFixed(1)+'/s'}
 }
 
 /* ---- Rendering ---- */
@@ -217,23 +242,26 @@ function draw(){
    if(u<.15){cx.fillStyle='rgba(255,255,255,'+.9*(1-u/.15)+')';cx.beginPath();cx.arc(X,Y,Rb*.8,0,7);cx.fill()}
    cx.strokeStyle='rgba(255,230,190,'+.6*(1-u)+')';cx.lineWidth=2;cx.beginPath();cx.arc(X,Y,Rb*(.3+1.9*u),0,7);cx.stroke();
    cx.lineWidth=1.5;for(const q of f.sp){const pt=w=>[X+Math.cos(q.a)*q.v*w*Rb*.9,Y+Math.sin(q.a)*q.v*w*Rb*.9+w*w*Rb*.8],a=pt(Math.max(0,u-.05)),b=pt(u);cx.strokeStyle='rgba(255,'+(160+q.s*80|0)+',60,'+(1-u)+')';cx.beginPath();cx.moveTo(a[0],a[1]);cx.lineTo(b[0],b[1]);cx.stroke()}}
-  for(const s of sprites){const u=(now-s.t0)/s.dur,X=(s.x0+(s.x1-s.x0)*u)*T,Y=(s.y0+(s.y1-s.y0)*u)*T-T*.5;
-   cx.globalAlpha=Math.min(1,(1-u)*3);cx.fillStyle='#222';cx.fillRect(X-5.5,Y-9,1,9);flag(cx,FL[s.p],X-4.5,Y-9,10,7);cx.globalAlpha=1}
+  {const fs=Math.max(12,T*1.05),fh2=fs*.66;
+   for(const s of sprites){const age=now-s.t0,u=Math.min(1,age/s.dur),e=u*u*(3-2*u),X=(s.x0+(s.x1-s.x0)*e)*T,Y=(s.y0+(s.y1-s.y0)*e)*T;
+    cx.globalAlpha=age<150?age/150:age>s.dur?Math.max(0,1-(age-s.dur)/s.rest):1;flag(cx,FL[s.p],X-fs/2,Y-fh2/2,fs,fh2)}
+   cx.globalAlpha=1}
   const fw=Math.max(24,T*1.5),fh=fw*.64;cx.textAlign='center';cx.textBaseline='middle';cx.font='700 '+Math.max(14,T*.72)+'px "Barlow Condensed",system-ui,sans-serif';cx.lineJoin='round';
   for(let q=1;q<4;q++){if(!alive[q])continue;const X=(pos[q].x+.5)*T-fw/2,Y=(pos[q].y+.5)*T-fh/2-T*.4;
    if(q===cur&&!won){cx.shadowColor='#fff';cx.shadowBlur=12}flag(cx,FL[q],X,Y,fw,fh);cx.shadowBlur=0;
-   const t=String(Math.floor(sol[q]));cx.lineWidth=3.5;cx.strokeStyle='rgba(10,16,22,.9)';cx.strokeText(t,X+fw/2,Y+fh+T*.55);cx.fillStyle='#fff';cx.fillText(t,X+fw/2,Y+fh+T*.55)}
+   const t=nf(sol[q]);cx.lineWidth=3.5;cx.strokeStyle='rgba(10,16,22,.9)';cx.strokeText(t,X+fw/2,Y+fh+T*.55);cx.fillStyle='#fff';cx.fillText(t,X+fw/2,Y+fh+T*.55)}
  }
  cx.restore();
  if(mode==='edit'&&ptr&&typeof tool==='number'){cx.strokeStyle='rgba(255,255,255,.85)';cx.lineWidth=1.5;cx.beginPath();cx.arc(ptr.x,ptr.y,(brush+.5)*T,0,7);cx.stroke()}
  if(mode==='play'){
-  if(drag&&drag.pl&&ptr)label(ptr.x+16,Math.max(4,ptr.y-44),'\u2212'+drag.pl.cost+(drag.pl.trunc?' max':''),drag.pl.trunc);
-  else if(pend&&pendAt)label(pendAt.x+16,Math.max(4,pendAt.y-44),'\u2212'+pend.cost+(pend.trunc?' max':''),pend.trunc)}
+  if(drag&&drag.pl&&ptr)label(ptr.x+16,Math.max(4,ptr.y-44),lab(drag.pl),false);
+  else if(pend&&pendAt)label(pendAt.x+16,Math.max(4,pendAt.y-44),lab(pend),false)}
 }
 function frame(){
- const t=performance.now(),dt=Math.min(.1,(t-last)/1000);last=t;now=t;
- if(mode==='play'){stats();step(dt)}
- draw();requestAnimationFrame(frame)
+ requestAnimationFrame(frame);
+ try{const t=performance.now(),dt=Math.min(.1,(t-last)/1000);last=t;now=t;
+  if(mode==='play'){if(t-lastSt>100){stats();lastSt=t}step(dt);netTick(t)}
+  draw()}catch(e){console.error(e)}
 }
 
 /* ---- Setup, world map, flags, bots ---- */
@@ -245,16 +273,18 @@ function inPoly(P,x,y){let r=false;const n=P.length/2;for(let a=0,b=n-1;a<n;b=a+
 function setGrid(w,h){W=w;H=h;terr=new Uint8Array(W*H);own=new Uint8Array(W*H);lm=new Uint8Array(W*H);ft=new Float32Array(W*H).fill(-1e9);caps=[null,null,null,null];resize()}
 function customGrid(){const r=cv.parentNode.getBoundingClientRect();return r.width>=r.height?[64,40]:[40,64]}
 function buildWorld(){setGrid(56,24);terr.fill(2);for(let y=0;y<H;y++)for(let x=0;x<W;x++){const lo=-170+(x+.5)/W*350,la=80-(y+.5)/H*136;if(WORLD.some(P=>inPoly(P,lo,la)))terr[idx(x,y)]=1}terr[idx(33,10)]=1;lm[idx(33,10)]=1}
-function assign(){NAME[1]=me.n||'Player';FL[1]=me.f;let k=0;for(let p=2;p<4;p++){do{k++}while(k%8===me.f||(p===3&&k%8===FL[2]));FL[p]=k%8;NAME[p]=BN[p-2]}for(let p=1;p<4;p++)OC[p]=FLAGS[FL[p]][4]}
-function pickCap(x,y){
+function assign(){if(net&&net.roster){for(let p=1;p<4;p++){const r=net.roster[p-1];NAME[p]=r.n;FL[p]=r.f;OC[p]=FLAGS[r.f][4]}return}NAME[1]=me.n||'Player';FL[1]=me.f;let k=0;for(let p=2;p<4;p++){do{k++}while(k%8===me.f||(p===3&&k%8===FL[2]));FL[p]=k%8;NAME[p]=BN[p-2]}for(let p=1;p<4;p++)OC[p]=FLAGS[FL[p]][4]}
+function spread(x,y){
  const land=[];for(let i=0;i<W*H;i++)if(terr[i]===1)land.push(i);const P=[{x,y}];
  for(let k=0;k<2;k++){let b=null,bd=-1;for(let t=0;t<250;t++){const i=land[(Math.random()*land.length)|0],c={x:i%W,y:(i/W)|0},d=Math.min(...P.map(q=>Math.hypot(q.x-c.x,q.y-c.y)));if(d>bd){bd=d;b=c}}P.push(b)}
- caps=[null,P[0],P[1],P[2]];start()
+ return P
 }
+function pickCap(x,y){const P=spread(x,y);caps=[null,P[0],P[1],P[2]];start()}
 function botMaybe(){if(bots&&!won&&cur!==1&&alive[cur])setTimeout(botTurn,900,cur)}
-function botTurn(p){
- if(cur!==p||won||mode!=='play')return;
- const L=diff,R=3+L*2,fr=[];
+function botTurn(p){if(cur!==p||won||mode!=='play')return;botAct(p);setTimeout(()=>{if(cur===p&&!won)dispatch({type:'end'})},1500)}
+function botAct(p){
+ if(won||mode!=='play'||!alive[p])return;
+ const L=diff,R=3+L*2+Math.min(12,Math.sqrt(sol[p])*.2),fr=[];
  for(let i=0;i<W*H;i++){if(own[i]!==p)continue;const x=i%W,y=(i/W)|0;for(const d of[[1,0],[-1,0],[0,1],[0,-1]]){const a=x+d[0],b=y+d[1];if(inb(a,b)&&terr[idx(a,b)]&&own[idx(a,b)]!==p){fr.push(idx(a,b));break}}}
  const foes=[1,2,3].filter(q=>q!==p&&alive[q]);
  if(sol[p]>=[40,30,20][L]&&fr.length&&foes.length){
@@ -262,47 +292,177 @@ function botTurn(p){
   const t=L===0?fr[(Math.random()*fr.length)|0]:fr.reduce((b,i)=>Math.hypot(i%W-c.x,((i/W)|0)-c.y)<Math.hypot(b%W-c.x,((b/W)|0)-c.y)?i:b);
   const z=new Uint8Array(W*H),X=t%W,Y=(t/W)|0,r=Math.ceil(R);
   for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++)if(Math.hypot(dx,dy)<=R&&inb(X+dx,Y+dy))z[idx(X+dx,Y+dy)]=1;
-  const pl=plan([],p,z,sol[p]*.8);if(pl.tiles.length)dispatch({type:'attack',p,tiles:pl.tiles,d:pl.d,cost:pl.cost});
+  const pl=plan([],p,z,sol[p]*.8);if(pl.tiles.length){const C=Math.floor(Math.min(sol[p]*.85,pl.cost*(1.2+L*.4)));dispatch({type:'attack',p,tiles:pl.tiles,d:pl.d,cost:C,m:calcM(C,pl.total)})}
   if(L>=1&&sol[p]>COST_MIS+80&&Math.random()<(L===2?.5:.2))dispatch({type:'missile',p,x:c.x+.5+Math.random()*4-2,y:c.y+.5+Math.random()*4-2})}
- setTimeout(()=>{if(cur===p&&!won)dispatch({type:'end'})},1500)
 }
 function menuView(v){
- const m=$('#menu');m.hidden=false;let h='<h1>Three Crowns</h1>';
+ if(v==='lobby'&&!net)v='main';const m=$('#menu');m.hidden=false;let h='<h1>Three Crowns</h1>';
  if(v==='main')h+='<button class="pri" data-a="play">Play</button><button data-a="multi">Multiplayer</button><button data-a="flags">Flags / Name</button><p id="mn"></p>';
  else if(v==='play')h+=`<p>Map</p><div class="seg">${['custom','world'].map(k=>`<button data-a="map" data-t="${k}" class="${mapType===k?'on':''}">${k==='custom'?'Custom':'World'}</button>`).join('')}</div><p>Bots</p><div class="seg">${['Easy','Normal','Hard'].map((k,i)=>`<button data-a="diff" data-t="${i}" class="${diff===i?'on':''}">${k}</button>`).join('')}</div><button class="pri" data-a="cont">Continue</button><button data-a="back">Back</button>`;
+ else if(v==='mp')h+='<button class="pri" data-a="mpcreate">Create room</button><p>or join with a code</p><input id="rc" maxlength="6" placeholder="ROOM CODE" autocapitalize="characters" autocomplete="off" spellcheck="false"><button data-a="mpjoin">Join room</button><button data-a="back">Back</button><p id="mn"></p>';
+ else if(v==='lobby')h+=lobbyHTML();
  else h+=`<input id="nm" maxlength="12" placeholder="Your name"><div class="fl">${FLAGS.map((f,i)=>`<canvas data-f="${i}" width="72" height="48" class="${i===me.f?'on':''}"></canvas>`).join('')}</div><button class="pri" data-a="saveflag">Save</button>`;
- m.innerHTML=h;if($('#nm'))$('#nm').value=me.n;m.querySelectorAll('canvas[data-f]').forEach(c=>flag(c.getContext('2d'),+c.dataset.f,0,0,72,48))
+ m.innerHTML=h;if($('#nm'))$('#nm').value=me.n;m.querySelectorAll('canvas[data-f]').forEach(c=>flag(c.getContext('2d'),+c.dataset.f,0,0,72,48));m.querySelectorAll('canvas[data-pf]').forEach(c=>flag(c.getContext('2d'),+c.dataset.pf,0,0,36,24))
 }
+
+/* ---- Multiplayer: Supabase Realtime broadcast. The host runs the whole simulation; guests send actions and render snapshots. ---- */
+const SB_URL='https://urhjjkjmrhfqaspmwxgz.supabase.co',SB_KEY='sb_publishable_K4QbGMQf1gchU1xtXYO_qA_xBFSyMh9';
+const myId=(()=>{try{let v=sessionStorage.getItem('tcid');if(!v){v=Math.random().toString(36).slice(2,10);sessionStorage.setItem('tcid',v)}return v}catch(e){return Math.random().toString(36).slice(2,10)}})();
+const esc=t=>String(t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),cleanName=t=>String(t||'').replace(/[<>&"'`]/g,'').trim().slice(0,12)||'Player',cleanFlag=v=>(((parseInt(v)||0)%8)+8)%8;
+function enc(a){let s='',p=a[0],n=0;for(let i=0;i<a.length;i++){if(a[i]===p)n++;else{s+=p+n.toString(36)+'.';p=a[i];n=1}}return s+p+n.toString(36)+'.'}
+function dec(s,len){const o=new Uint8Array(len);let k=0;for(const r of String(s).split('.')){if(!r)continue;const v=+r[0],n=parseInt(r.slice(1),36);if(k+n>len)break;o.fill(v,k,k+n);k+=n}return o}
+function netSend(ev,payload){try{if(net&&net.ch){const r=net.ch.send({type:'broadcast',event:ev,payload});if(r&&r.catch)r.catch(()=>{})}}catch(e){console.error(e)}}
+function netErr(t){const e=$('#mn');if(e)e.textContent=t;else flash(t)}
+function netConnect(code,ready){
+ if(!window.supabase){netErr('Multiplayer library failed to load. Check your connection.');return null}
+ const sb=window.__sb||(window.__sb=window.supabase.createClient(SB_URL,SB_KEY,{realtime:{params:{eventsPerSecond:20}}})),ch=sb.channel('tc-'+code,{config:{broadcast:{self:false}}});
+ for(const ev of['hello','lobby','start','snap','act','mis','bye'])ch.on('broadcast',{event:ev},m=>{try{onMsg(ev,(m&&m.payload)||{})}catch(e){console.error(e)}});
+ ch.subscribe(st2=>{if(st2==='SUBSCRIBED')ready();else if(st2==='CHANNEL_ERROR'||st2==='TIMED_OUT')netErr('Could not reach the room server. Is Realtime enabled in Supabase?')});
+ return ch
+}
+function netLeave(){if(!net)return;const n=net;net=null;try{if(n.role==='guest')netSendOn(n,'bye',{id:myId})}catch(e){}clearInterval(n.hb);clearInterval(n.tick);clearTimeout(n.to);try{window.__sb.removeChannel(n.ch)}catch(e){}}
+function netSendOn(n,ev,payload){try{const r=n.ch.send({type:'broadcast',event:ev,payload});if(r&&r.catch)r.catch(()=>{})}catch(e){}}
+function mpCreate(){
+ const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let code='';for(let i=0;i<4;i++)code+=A[(Math.random()*A.length)|0];
+ netLeave();net={role:'host',code,id:myId,seat:1,players:[{id:myId,n:cleanName(me.n),f:cleanFlag(me.f),seen:0}],map:'random',started:false,drawing:false,roster:null,lastSnap:0,bc:[0,0,0,0],gid:'',elim:0};bots=false;
+ netErr('Connecting...');
+ net.ch=netConnect(code,()=>{if(!net)return;menuView('lobby');net.tick=setInterval(()=>{if(!net)return;if(!net.started){const t=performance.now();net.players=net.players.filter(x=>x.id===myId||t-x.seen<8000)}sendLobby()},2000)});
+ if(!net.ch)net=null
+}
+function mpJoin(){
+ const code=($('#rc').value||'').toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,6);if(code.length<4)return netErr('Enter the room code');
+ netLeave();net={role:'guest',code,id:myId,seat:0,lobby:null,started:false,gid:'',roster:null,lastSnapAt:0,warned:false,elim:0};bots=false;
+ netErr('Connecting...');
+ net.ch=netConnect(code,()=>{if(!net)return;sendHello();net.hb=setInterval(sendHello,2000);net.to=setTimeout(()=>{if(net&&!net.lobby){netLeave();netErr('Room not found. Check the code.')}},7000)});
+ if(!net.ch)net=null
+}
+function sendHello(){if(net)netSend('hello',{id:myId,n:cleanName(me.n),f:cleanFlag(me.f),have:net.gid||''})}
+function lobbyMsg(){return{code:net.code,players:net.players.map(x=>({id:x.id,n:x.n,f:x.f})),map:net.map,diff,started:net.started,drawing:net.drawing}}
+function sendLobby(){if(net&&net.role==='host')netSend('lobby',lobbyMsg())}
+function lobbyHTML(){
+ const host=net.role==='host',L=host?lobbyMsg():(net.lobby||{players:[],map:'random',diff:1,code:net.code});
+ let h=`<p>Room code</p><h1 style="letter-spacing:8px;margin:0">${esc(L.code)}</h1><p>Share this code with your brothers</p>`;
+ for(let i=0;i<3;i++){const x=L.players[i];h+=x?`<div class="pr"><canvas data-pf="${cleanFlag(x.f)}" width="36" height="24"></canvas>${esc(cleanName(x.n))}${i===0?' (host)':''}</div>`:'<div class="pr" style="opacity:.5">Empty seat (bot)</div>'}
+ if(host)h+=`<p>Map</p><div class="seg">${[['random','Random'],['world','World'],['draw','Draw']].map(k=>`<button data-a="mpmap" data-t="${k[0]}" class="${L.map===k[0]?'on':''}">${k[1]}</button>`).join('')}</div><p>Bots fill empty seats</p><div class="seg">${['Easy','Normal','Hard'].map((k,i)=>`<button data-a="mpdiff" data-t="${i}" class="${diff===i?'on':''}">${k}</button>`).join('')}</div><button class="pri" data-a="mpstart">Start game</button>`;
+ else h+=`<p>${L.drawing?'The host is drawing the map...':'Waiting for the host to start...'}</p>`;
+ return h+'<button data-a="mpleave">Leave</button><p id="mn"></p>'
+}
+function hostBegin(){
+ if(!net||net.role!=='host')return;
+ const R=[],used=new Set();for(const pl of net.players){let f=pl.f;while(used.has(f))f=(f+1)%8;used.add(f);R.push({id:pl.id,n:pl.n,f,bot:0})}
+ let bi=0;while(R.length<3){let f=0;while(used.has(f))f++;used.add(f);R.push({id:null,n:BN[bi++],f,bot:1})}
+ net.roster=R;botSeat=[0,R[0].bot,R[1].bot,R[2].bot];net.bc=[0,2,2,2];$('#menu').hidden=true;
+ if(net.map==='draw'){net.drawing=true;sendLobby();setGrid(...customGrid());mode='edit';tool=1;ui();hint();return}
+ net.drawing=false;setGrid(...customGrid());
+ if(net.map==='world'){buildWorld();const land=[];for(let i=0;i<W*H;i++)if(terr[i]===1)land.push(i);const t=land[(Math.random()*land.length)|0],P=spread(t%W,(t/W)|0);caps=[null,P[0],P[1],P[2]]}
+ else randomMap();
+ start()
+}
+function startMsg(){const l=[];for(let i=0;i<W*H;i++)if(lm[i])l.push(i);return{gid:net.gid,W,H,t:Array.from(terr).join(''),l,c:[1,2,3].map(q=>[caps[q].x,caps[q].y]),r:net.roster,o:enc(own),s:[1,2,3].map(q=>Math.floor(sol[q])),a:alive.slice(1).join(''),w:won}}
+function hostStarted(){net.gid=Math.random().toString(36).slice(2,8);net.started=true;net.drawing=false;net.lastSnap=0;netSend('start',startMsg());sendLobby()}
+function sendSnap(){netSend('snap',{g:net.gid,o:enc(own),s:[1,2,3].map(q=>Math.floor(sol[q])),a:alive.slice(1).join(''),w:won})}
+function netTick(t){
+ if(!net||!net.started)return;
+ if(net.role==='host'){if(t-net.lastSnap>200){net.lastSnap=t;sendSnap()}}
+ else if(t-net.lastSnapAt>8000&&!net.warned){net.warned=true;msg.textContent='Lost connection to the host'}
+}
+function hostAct(p){
+ if(!net.started||!net.roster||won)return;
+ const seat=net.roster.findIndex(r=>r.id===p.id)+1,a=p.a;if(!seat||!alive[seat]||!a)return;
+ if(a.type==='attack'){
+  if(!Array.isArray(a.tiles)||!Array.isArray(a.d)||a.tiles.length!==a.d.length||a.tiles.length>W*H)return;
+  for(let k=0;k<a.tiles.length;k++){const i=a.tiles[k];if(!Number.isInteger(i)||i<0||i>=W*H||!terr[i]||!(a.d[k]>=1))return}
+  const cost=Math.floor(+a.cost),m=Math.max(.3,Math.min(3,+a.m||1));if(!(cost>=1))return;
+  reduce({type:'attack',p:seat,tiles:a.tiles,d:a.d.map(Number),cost,m})}
+ else if(a.type==='missile'){const x=+a.x,y=+a.y;if(!(x>=0&&x<=W&&y>=0&&y<=H))return;reduce({type:'missile',p:seat,x,y})}
+}
+function beginGuest(p){
+ const r=Array.isArray(p.r)?p.r:[],i=r.findIndex(x=>x&&x.id===myId);
+ if(i<0){netLeave();menuView('mp');netErr('That game already started.');return}
+ net.gid=p.gid;net.roster=r.map(x=>({id:x.id,n:cleanName(x.n),f:cleanFlag(x.f),bot:x.bot?1:0}));net.seat=i+1;
+ setGrid(p.W|0,p.H|0);terr.set(Uint8Array.from(String(p.t),c=>+c));lm.fill(0);for(const k of p.l||[])lm[k]=1;
+ caps=[null,...p.c.map(c=>({x:c[0],y:c[1]}))];botSeat=[0,...net.roster.map(x=>x.bot)];assign();
+ $('#menu').hidden=true;win.hidden=true;hideCard();
+ own.set(dec(p.o,W*H));sol=[0,...p.s.map(Number)];alive=[0,...[0,1,2].map(k=>+p.a[k]?1:0)];attacks=[];missiles=[];fx=[];sprites=[];pops=[];armed=false;pend=null;won=p.w|0;cur=net.seat;mode='play';net.started=true;net.warned=false;net.elim=0;net.lastSnapAt=performance.now();
+ stats();for(let q=1;q<4;q++)pos[q]={x:st.tx[q],y:st.ty[q]};ui();hint()
+}
+function applySnap(p){
+ net.lastSnapAt=performance.now();if(net.warned){net.warned=false;hint()}
+ const o=dec(p.o,W*H),fl=[];
+ for(let i=0;i<o.length;i++)if(o[i]!==own[i]){ft[i]=now;if(o[i])fl.push(i);own[i]=o[i]}
+ for(let k=1;k<4;k++){sol[k]=+p.s[k-1]||0;alive[k]=+p.a[k-1]?1:0}
+ for(let n=0;n<Math.min(2,fl.length);n++){const i=fl[(Math.random()*fl.length)|0];pop(i%W+.5,((i/W)|0)+.5)}
+ if(fl.length&&sprites.length<16){const i=fl[(Math.random()*fl.length)|0],q=own[i],x=i%W,y=(i/W)|0,set=new Set(fl);let sx=x,sy=y;for(const d of D4){const a=x+d[0],b=y+d[1];if(inb(a,b)&&own[idx(a,b)]===q&&!set.has(idx(a,b))){sx=a;sy=b;break}}sprites.push({p:q,x0:sx+.5,y0:sy+.5,x1:x+.5,y1:y+.5,t0:now,dur:900+Math.random()*400,rest:1100})}
+ if(p.w&&!won){const w=p.w|0;won=w;setTimeout(()=>{if(won===w)showWin(w)},1800)}
+}
+function onMsg(ev,p){
+ if(!net)return;
+ if(net.role==='host'){
+  if(ev==='hello'){const id=String(p.id||'').slice(0,16);if(!id||id===myId)return;let pl=net.players.find(x=>x.id===id),add=false;
+   if(!pl){if(net.started||net.players.length>=3){sendLobby();return}pl={id,n:cleanName(p.n),f:cleanFlag(p.f)};net.players.push(pl);add=true}
+   pl.seen=performance.now();
+   if(net.started&&net.roster&&net.roster.some(r=>r.id===id)&&p.have!==net.gid)netSend('start',startMsg());
+   if(add){sendLobby();if(!$('#menu').hidden)menuView('lobby')}}
+  else if(ev==='act')hostAct(p);
+  else if(ev==='bye'&&!net.started){const n=net.players.length;net.players=net.players.filter(x=>x.id!==p.id);if(net.players.length!==n){sendLobby();if(!$('#menu').hidden)menuView('lobby')}}
+ }else{
+  if(ev==='lobby'){net.lobby=p;clearTimeout(net.to);
+   if(p.started&&!net.started&&!(p.players||[]).some(x=>x.id===myId)){netLeave();menuView('mp');netErr('That game already started.');return}
+   if(!net.started&&!$('#menu').hidden)menuView('lobby')}
+  else if(ev==='start'){if(p.gid!==net.gid)beginGuest(p)}
+  else if(ev==='snap'){if(net.started&&p.g===net.gid)applySnap(p)}
+  else if(ev==='mis'&&net.started)missiles.push({s:p.s,x:+p.x,y:+p.y,p:p.p|0,t0:performance.now(),dur:+p.dur||900,ah:+p.ah||0})
+ }
+}
+
+/* ---- Troops bar ---- */
+const nf=n=>Math.floor(n).toLocaleString('en'),hp=()=>bots?1:cur,avail=()=>Math.max(0,Math.floor(sol[hp()])),Cnow=()=>Math.max(0,Math.min(troops,avail()));
+function calcM(C,t){return t>0?Math.max(.3,Math.min(3,C/t)):1}
+function lab(pl){return'−'+nf(pl.spend)+' · '+(pl.m<.75?'slow':pl.m<1.5?'normal':'fast')+(pl.trunc?' · partial':'')}
+function replan(){if(!pend||!pend.pts)return;const pts=pend.pts,n=plan(pts,cur,null,Cnow());if(n.tiles.length){n.pts=pts;pend=n}else pend=null;ui()}
+function syncT(){
+ if(tbar.hidden)return;const av=avail();
+ if(tauto)troops=Math.floor(av*.5);if(troops>av)troops=av;
+ if(document.activeElement!==tin&&tin.value!==String(troops))tin.value=troops;
+ if(!sliding){const v=String(av?Math.max(1,Math.round(troops/av*100)):0);if(tsl.value!==v)tsl.value=v}
+ const off=bots&&cur!==1;if(tsl.disabled!==off)tsl.disabled=tin.disabled=off
+}
+tsl.addEventListener('input',()=>{tauto=false;troops=Math.round(+tsl.value/100*avail());tin.value=troops;replan()});
+tin.addEventListener('input',()=>{tauto=false;troops=Math.max(0,parseInt(tin.value)||0);replan()});
+tin.addEventListener('change',()=>{tin.value=Cnow()});
+['pointerdown','touchstart','mousedown'].forEach(e=>tsl.addEventListener(e,()=>{sliding=true}));
+['pointerup','pointercancel','touchend','mouseup','change'].forEach(e=>tsl.addEventListener(e,()=>{sliding=false}));
 
 /* ---- UI ---- */
 function ui(){
+ {const sh=mode==='play';if(tbar.hidden===sh){tbar.hidden=!sh;resize()}}
  if(mode==='edit'){
   const tb=(t,l)=>`<button data-a="tool" data-t="${t}" class="${tool==t?'on':''}">${l}</button>`;
-  bar.innerHTML=tb(1,'Land')+tb(2,'Water')+tb(0,'Erase')+[[1,'S'],[3,'M'],[5,'L']].map(b=>`<button data-a="brush" data-t="${b[0]}" class="${brush===b[0]?'on':''}">${b[1]}</button>`).join('')+[1,2,3].map(q=>tb('c'+q,`<i class="dot" style="background:${OC[q]}"></i>${q===1?'You':'Bot '+(q-1)}`)).join('')+tb('m','Mecca')+'<span class="sp"></span><button data-a="rand">Random</button><button data-a="clear">Clear</button><button data-a="edit">Menu</button><button class="pri" data-a="start">Start</button>'}
+  bar.innerHTML=tb(1,'Land')+tb(2,'Water')+tb(0,'Erase')+[[1,'S'],[3,'M'],[5,'L']].map(b=>`<button data-a="brush" data-t="${b[0]}" class="${brush===b[0]?'on':''}">${b[1]}</button>`).join('')+[1,2,3].map(q=>tb('c'+q,`<i class="dot" style="background:${OC[q]}"></i>${net?'P'+q:q===1?'You':'Bot '+(q-1)}`)).join('')+tb('m','Mecca')+'<span class="sp"></span><button data-a="rand">Random</button><button data-a="clear">Clear</button><button data-a="edit">Menu</button><button class="pri" data-a="start">Start</button>'}
  else if(mode==='pick')bar.innerHTML='<span class="chip">Pick your starting place</span><span class="sp"></span><button data-a="edit">Menu</button>';
- else bar.innerHTML=`<span class="chip"><i class="dot" style="background:${OC[cur]}"></i>${NAME[cur]}</span><button id="bMis" data-a="mis" class="${armed?'on':''}">Missile ${COST_MIS}</button>`+(pend?`<button class="pri" data-a="go">Conquer (${pend.cost})</button><button data-a="no">Cancel</button>`:'')+'<span class="sp"></span><button data-a="end">End turn</button><button data-a="edit">Menu</button>'
+ else bar.innerHTML=`<span class="chip"><i class="dot" style="background:${OC[cur]}"></i>${NAME[cur]}</span><button id="bMis" data-a="mis" class="${armed?'on':''}">Missile ${nf(COST_MIS)}</button>`+(pend?`<button class="pri" data-a="go">Conquer (${nf(pend.spend)})</button><button data-a="no">Cancel</button>`:'')+'<span class="sp"></span>'+(net?'':'<button data-a="end">End turn</button>')+'<button data-a="edit">'+(net?'Leave':'Menu')+'</button>'
 }
-function hint(){msg.textContent=mode==='pick'?'Tap land to place your capital. Bots start far away.':mode==='edit'?'Draw your map with the brush, drop a Mecca, and place all three capitals (you and two bots).':armed?'Tap a target for the missile.':'Drag from your border to draw an attack zone. Tap a capital to inspect it.'}
+function hint(){msg.textContent=mode==='pick'?'Tap land to place your capital. Bots start far away.':mode==='edit'?'Draw your map with the brush, drop a Mecca, and place all three capitals (you and two bots).':armed?'Tap a target for the missile.':'Set troops below, then drag from your border to draw a zone. Tap a capital to inspect it.'}
 function flash(t){msg.textContent=t;setTimeout(hint,2400)}
 function showCard(p){cardP=p;card.innerHTML=`<canvas id="cf" width="36" height="24"></canvas><div><b>${NAME[p]}${p===cur?' (you)':''}</b><br>Soldiers <span id="cs"></span><br>Land <span id="cl"></span><br>Income <span id="ci"></span></div>`;card.hidden=false;flag($('#cf').getContext('2d'),FL[p],0,0,36,24)}
 function hideCard(){cardP=0;card.hidden=true}
 function act(a,t){
  if(bots&&mode==='play'&&cur!==1&&(a==='go'||a==='mis'||a==='end'))return;
- const M={play:()=>menuView('play'),flags:()=>menuView('flags'),back:()=>menuView('main'),multi:()=>{$('#mn').textContent='Multiplayer is coming soon.'},
+ const M={play:()=>menuView('play'),flags:()=>menuView('flags'),back:()=>menuView('main'),multi:()=>menuView('mp'),mpcreate:()=>mpCreate(),mpjoin:()=>mpJoin(),mpleave:()=>{netLeave();menuView('main')},mpstart:()=>hostBegin(),mpmap:()=>{if(net&&net.role==='host'){net.map=t;sendLobby();menuView('lobby')}},mpdiff:()=>{if(net&&net.role==='host'){diff=+t;sendLobby();menuView('lobby')}},
   map:()=>{mapType=t;menuView('play')},diff:()=>{diff=+t;menuView('play')},
   saveflag:()=>{me.n=($('#nm').value||'').trim().slice(0,12)||'Player';try{localStorage.setItem('tc3',JSON.stringify(me))}catch(e){}menuView('main')},
-  cont:()=>{$('#menu').hidden=true;bots=true;assign();if(mapType==='world'){buildWorld();mode='pick'}else{setGrid(...customGrid());mode='edit'}tool=1;ui();hint()}};
+  max:()=>{troops=avail();tauto=false;replan()},cont:()=>{$('#menu').hidden=true;bots=true;assign();if(mapType==='world'){buildWorld();mode='pick'}else{setGrid(...customGrid());mode='edit'}tool=1;ui();hint()}};
  if(M[a])return M[a]();
  if(a==='tool')tool=isNaN(t)?t:+t;
  else if(a==='brush')brush=+t;
  else if(a==='rand')randomMap();
  else if(a==='clear'){terr.fill(0);lm.fill(0);caps=[null,null,null,null]}
- else if(a==='start'||a==='again')return start();
+ else if(a==='start'||a==='again')return(net&&net.role==='guest')?0:start();
  else if(a==='mis'){armed=!armed;pend=null}
- else if(a==='go'&&pend){dispatch({type:'attack',p:cur,tiles:pend.tiles,d:pend.d,cost:pend.cost});pend=null}
+ else if(a==='go'&&pend){dispatch({type:'attack',p:cur,tiles:pend.tiles,d:pend.d,cost:pend.spend,m:pend.m});pend=null}
  else if(a==='no')pend=null;
  else if(a==='end')return dispatch({type:'end'});
- else if(a==='edit'){mode='menu';bots=false;attacks=[];missiles=[];fx=[];sprites=[];won=0;win.hidden=true;hideCard();menuView('main')}
+ else if(a==='edit'){netLeave();mode='menu';bots=false;attacks=[];missiles=[];fx=[];sprites=[];won=0;win.hidden=true;hideCard();menuView('main')}
  ui();hint()
 }
 document.body.addEventListener('click',e=>{const c=e.target.closest('canvas[data-f]');if(c){me.f=+c.dataset.f;document.querySelectorAll('canvas[data-f]').forEach(k=>k.classList.toggle('on',k===c));return}const b=e.target.closest('button[data-a]');if(b)act(b.dataset.a,b.dataset.t)});
@@ -313,13 +473,13 @@ function addPt(x,y){
  const L=drag.pts[drag.pts.length-1],dx=x-L[0],dy=y-L[1],n=Math.ceil(Math.hypot(dx,dy)*2);
  for(let k=1;k<=n;k++)drag.pts.push([L[0]+dx*k/n,L[1]+dy*k/n]);
  if(Math.hypot(x-drag.pts[0][0],y-drag.pts[0][1])>1.2)drag.moved=true;
- drag.pl=plan(drag.pts,cur)
+ drag.pl=plan(drag.pts,cur,null,Cnow())
 }
 function down(x,y){
  const l=loc(x,y);ptr={x:l[2],y:l[3]};const tx=Math.floor(l[0]),ty=Math.floor(l[1]),ok=inb(tx,ty);
  if(mode==='pick'){if(ok&&terr[idx(tx,ty)]===1)pickCap(tx,ty);return}
  if(mode==='edit'){if(ok){painting=true;paintLast=[tx,ty];paint(tx,ty,false)}return}
- if(won||!ok||(bots&&cur!==1))return;hideCard();const i=idx(tx,ty);
+ if(won||!ok||!alive[cur]||(bots&&cur!==1))return;hideCard();const i=idx(tx,ty);
  if(armed){if(sol[cur]<COST_MIS){armed=false;ui();return flash('Not enough soldiers')}
   if(own[i]!==cur&&terr[i]){dispatch({type:'missile',p:cur,x:tx+.5,y:ty+.5});armed=false;ui();hint()}return}
  tap={x:l[2],y:l[3],i,moved:false};
@@ -335,7 +495,7 @@ function move(x,y){
 function up(){
  if(mode==='edit'){painting=false;return}
  if(drag){const d=drag;drag=null;
-  if(d.moved&&d.pl&&d.pl.tiles.length){pend=d.pl;pendAt=ptr&&{x:ptr.x,y:ptr.y}}
+  if(d.moved&&d.pl&&d.pl.tiles.length){pend=d.pl;pend.pts=d.pts;pendAt=ptr&&{x:ptr.x,y:ptr.y}}
   else if(!d.moved){const c=tap&&capAt(tap.i);if(c)showCard(c)}
   ui();hint()}
  else if(tap&&!tap.moved){const c=capAt(tap.i);if(c)showCard(c)}
